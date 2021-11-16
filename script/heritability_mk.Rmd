@@ -1,0 +1,325 @@
+---
+title: "Broad-sense community heritability"
+description: | 
+  Applying model-based approaches to the calculation of broad-sense community heritability
+date: "November 5, 2021"
+author:
+  - first_name: "Riccardo"
+    last_name: "Soldan"
+    url: https://github.com/RSO9192
+   
+output: 
+  distill::distill_article:
+    toc: true
+    number_sections: true
+    toc_depth: 4
+    code_folding: true
+  toc_float: 
+    collapsed: false
+    smooth_scroll: true
+bibliography: biblio.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setting the scene
+
+Broad-sense community heritability extends the concept of broad-sense heritability to cummunity level. In practice, it allows us to understand whether to host genotypic variation corresponds variation in a community of interacting organisms  [@whitham_framework_2006]. It is important because it provides evidence of community selection [@whitham_intraspecific_2020]. Debate about whether selection acts at individual level or community level is a very heated argument among evolutionary biologists. 
+
+Despite being an important matric in the context of evolution, its calculation method is not optimal. Following the official calculation method proposed by Whytam et al., [@whitham_framework_2006], broad-sense community heritability is calculated as follow:
+
+1) apply NMDS to community data. For example, this can be an OTU table or arthropod community associated with different trees. The important thing is that you need to have several tree genotypes which are replicated. For example, you have 3 replicate of genotype A, 3 replicate of genotype B and so forth. Replicates need to be genotypically identic to each other, thus they need to be clones. 
+
+2) Perform an ANOVA on the NMDS scores, having plant genotype as explanatory variable. The resulting R^2 will tell you the heritability value and the the significance. 
+
+## Idea of the paper
+
+The idea of the paper would be to apply the above mentioned method to different experiments, including arthropod data and microbiome data and highlight the statistical problem related this approach. We then propose to calculate broad-sense community heritability with mvabund. 
+
+My idea was to make a short paper that would fit under the category of brief communication for Nature method (https://www.nature.com/nmeth/content) or Nature in ecology and evolution (https://www.nature.com/natecolevol/content). Let me know what you think
+
+
+```{r, include=FALSE}
+library(vegan)
+library(readxl)
+library(tidyverse)
+library(mvabund)
+library(parallel)
+library(rmarkdown)
+
+```
+
+## Community heritability calculated on arthropod community
+
+```{r, include=FALSE}
+arth_df <- read_excel("../data/Lamit_CWGenotypeForHeritabilityMethods.xlsx", sheet = 2)
+
+arth_matrix <- arth_df %>% 
+  select(-2) %>% 
+    column_to_rownames("Tree")
+
+
+```
+
+This is how the data look like. We have replicates of different tree genotypes and for each tree we have community data
+
+```{r}
+paged_table(arth_df)
+```
+
+### Traditional approach
+
+One problem of this method already is that if you force NMDS to have 1 axes only, it will not converge. Thus, the only way is to calculate 2 axes and then use the first one for the calculation of heritability.
+
+```{r}
+#arth_NMDS=metaMDS(arth_matrix,k=2,trymax=5000)
+
+```
+
+```{r, include=FALSE}
+
+arth_NMDS=metaMDS(arth_matrix,k=2,trymax=5000)
+
+```
+
+Final table
+
+```{r}
+arth_NMDS_scs <- data.frame(arth_NMDS$points) %>% 
+  select(-2) %>% 
+  rownames_to_column(var="Tree") %>% 
+    left_join(select(arth_df, 1:2)) %>% 
+    mutate(Genotype=as.factor(Genotype))
+
+paged_table(arth_NMDS_scs)
+```
+
+Calculating heritability. Again, several problems here as we would need to check assumptions of linear models. Heritability is 48-50% and it is significant (p=0.01). David, this experiment has an unbalanced design. However, as far as I know, it is handled automatically. Is it correct?
+
+```{r}
+
+arth_lm <- lm(MDS1~Genotype, data=arth_NMDS_scs)
+
+RsquareAdj(arth_lm)
+
+```
+
+
+```{r}
+
+anova(arth_lm)
+
+```
+
+
+### mvabund approach
+
+Applying the MGLM. David, could you confirm that unbalance design is not a problem?
+
+```{r}
+arth_mvb <- mvabund(arth_matrix)
+
+arth_MGLM <- manyglm(arth_mvb~ Genotype, data = arth_df)
+
+plot(arth_MGLM)
+
+```
+
+Heritability is 20%
+
+```{r}
+
+arth_int <- manyglm(arth_mvb~ 1) # intercept only model
+
+null_dev_arth <- -2*sum(logLik(arth_int))
+
+res_dev_arth <- -2*sum(logLik(arth_MGLM))
+
+((null_dev_arth-res_dev_arth)/null_dev_arth)*100
+
+```
+
+and it is significant
+
+```{r}
+
+(arth_mvb_out <- anova(arth_MGLM, nBoot = 999))
+
+```
+
+## Community heritability calculated on endophytes
+
+### traditional approach
+
+We basically do the same thing as before. We calculate NMDS1 score and apply ANOVA 
+
+```{r}
+ends_df <- read_excel("../data/Lamit_CWGenotypeForHeritabilityMethods.xlsx", sheet = 4)
+
+paged_table(ends_df)
+```
+
+
+```{r, include=FALSE}
+ends_matrix <- ends_df %>% 
+  select(-2) %>% 
+  column_to_rownames("Tree")
+
+ends_NMDS=metaMDS(ends_matrix,k=2,trymax=5000)
+
+```
+
+
+```{r}
+ends_NMDS_scs <- data.frame(ends_NMDS$points) %>% 
+    select(-2) %>% 
+    rownames_to_column(var="Tree") %>% 
+    left_join(select(ends_df, 1:2)) %>% 
+    mutate(Genotype=as.factor(Genotype))
+
+paged_table(ends_NMDS_scs)
+```
+
+Heritability is 18% but it is not significant 
+
+```{r}
+ends_lm <- lm(MDS1~Genotype, data=ends_NMDS_scs)
+
+RsquareAdj(ends_lm) 
+
+anova(ends_lm) 
+```
+
+### mvabund approach
+
+Heritability is significant (p=0.013) and it is 13%
+
+```{r}
+
+ends_mvb <- mvabund(ends_matrix)
+
+ends_MGLM <- manyglm(ends_mvb~ Genotype, data = ends_df)
+
+plot(ends_MGLM)
+
+```
+
+```{r}
+# for significance of heritability
+
+(ends_mvb_out <- anova(ends_MGLM, nBoot = 999))
+
+# Heritability calculation
+
+ends_int <- manyglm(ends_mvb~ 1) # intercept only model
+
+null_dev_ends <- -2*sum(logLik(ends_int))
+
+res_dev_ends <- -2*sum(logLik(ends_MGLM))
+
+((null_dev_ends-res_dev_ends)/null_dev_ends)*100
+
+
+```
+
+
+
+## Community heritability calculated on microbiome
+### traditional approach
+
+This dataset will be published soon. Basically, it represents the microbiome of different common bean genotypes grown in a greenhouse (complete randomization) with about 7 replicate each. 
+
+```{r}
+
+mcrb_df <- read_csv("../data/otu_table.csv")
+
+paged_table(mcrb_df)
+```
+
+
+
+```{r, include=FALSE}
+mcrb_matrix <- mcrb_df %>% 
+  column_to_rownames(var="Sample_ID") %>% 
+  select(-Accession)
+
+mcrb_NMDS=metaMDS(mcrb_matrix,k=2,trymax=5000)
+
+```
+
+```{r}
+mcrb_NMDS_scs <- data.frame(mcrb_NMDS$points) %>% 
+    select(-2) %>% 
+    rownames_to_column(var="Sample_ID") %>% 
+    left_join(select(mcrb_df,Sample_ID,Accession))
+
+paged_table(mcrb_NMDS_scs)
+
+```
+
+
+
+```{r}
+
+# community heritability is 20% and non significant
+
+mcrb_lm <- lm(MDS1~Accession, data=mcrb_NMDS_scs)
+
+RsquareAdj(mcrb_lm)
+
+anova(mcrb_lm)
+```
+
+
+### mvabund approach
+
+```{r}
+
+mcrb_mvb <- mvabund(mcrb_matrix)
+mcrb_MGLM <- manyglm(mcrb_mvb ~ Accession, data = mcrb_df)
+
+plot(mcrb_MGLM)
+```
+
+Heritability is 8% but it is significant
+
+```{r}
+
+# Heritability calculation
+
+mcrb_int <- manyglm(mcrb_mvb~ 1) # intercept only model
+
+null_dev_mcrb <- -2*sum(logLik(mcrb_int))
+
+res_dev_mcrb <- -2*sum(logLik(mcrb_MGLM))
+
+((null_dev_mcrb-res_dev_mcrb)/null_dev_mcrb)*100
+
+```
+
+We are running mvabund in multicore to speed up the process
+
+```{r}
+# for significance of heritability
+mcrb_mvb_out <- mclapply (1:7, function(x) {
+
+anova(mcrb_MGLM, nBoot = 30, show.time = "all")
+    
+}, mc.cores = 7)
+  
+K=7 # cores
+N=30  #bootstrapping
+
+pi_acc <- map_dbl(mcrb_mvb_out, ~ .x$table[2,4])
+piMean_acc = mean(pi_acc)
+(p_acc = piMean_acc + (piMean_acc-1)*(K-1)/(K*N+1)) # Accession is significant
+```
+
+### Conclusion
+
+I think we have no problem to justify why using the NMDS approach is not good. In terms of result comparison it seems to be that the heritability measure is always lower when calculated with mvabund, but mvabund gives more often a statistical significance. 
+
+
+
